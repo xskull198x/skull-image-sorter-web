@@ -4,18 +4,18 @@ A local-only browser version of the original Python/Tk image sorter.
 
 The user picks a source folder, picks output folders, and sorts images with hotkeys:
 
-- `1` -> Good
-- `2` -> Rejected
-- `3` -> Bad
-- `A` / `Left` -> Previous image
-- `D` / `Right` -> Next image
-- `Space` -> Skip
-- `Ctrl+Z` -> Undo last sort action
-- `G` -> Gallery mode
-- `N` -> Toggle filename display
-- `` ` `` -> Copy/move to DELETE with `DELETE_` prefix
-- `H` -> Hide/show UI
-- `+` / `-` -> Gallery thumbnail zoom
+- `1` → Good
+- `2` → Rejected
+- `3` → Bad
+- `A` / `Left` → Previous image
+- `D` / `Right` → Next image
+- `Space` → Skip
+- `Ctrl+Z` → Undo last sort action
+- `G` → Gallery mode
+- `N` → Toggle filename display
+- `` ` `` → Copy/move to DELETE with `DELETE_` prefix
+- `H` → Hide/show UI
+- `+` / `-` → Gallery thumbnail zoom
 
 ## What this is
 
@@ -53,7 +53,7 @@ or:
    - `styles.css`
    - `app.js`
    - `README.md`
-3. In GitHub, go to **Settings -> Pages**.
+3. In GitHub, go to **Settings → Pages**.
 4. Set **Source** to `Deploy from a branch`.
 5. Choose the `main` branch and `/root` folder.
 6. Save.

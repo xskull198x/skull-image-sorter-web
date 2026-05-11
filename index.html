@@ -1,0 +1,134 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Skull Image Sorter Web</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <main id="app" class="app-shell">
+    <section id="viewerPanel" class="viewer-panel" aria-label="Image viewer">
+      <div id="dropZone" class="drop-zone hidden">
+        <div>
+          <h1>Skull Image Sorter Web</h1>
+          <p>Pick a source folder, then sort with <kbd>1</kbd>, <kbd>2</kbd>, or <kbd>3</kbd>. Files stay local. Nothing uploads.</p>
+          <button id="emptySelectSource" class="primary">Select source folder</button>
+        </div>
+      </div>
+
+      <div id="singleViewer" class="single-viewer">
+        <img id="mainImage" alt="Current image" draggable="false" />
+      </div>
+
+      <div id="galleryViewer" class="gallery-viewer hidden" aria-label="Gallery view"></div>
+    </section>
+
+    <aside id="sidebar" class="sidebar" aria-label="Controls">
+      <div class="brand-row">
+        <div>
+          <h1>Image Sorter</h1>
+          <p class="muted">Local-only browser version</p>
+        </div>
+        <button id="hideUiBtn" title="Hide sidebar">H</button>
+      </div>
+
+      <section class="card warning-card" id="compatWarning">
+        <strong>Browser check</strong>
+        <p id="compatText">Checking File System Access API support…</p>
+      </section>
+
+      <section class="card">
+        <h2>Folders</h2>
+        <button id="selectSourceBtn" class="primary">Select source folder</button>
+        <button id="selectOutputRootBtn">Select one output root</button>
+        <p class="tiny muted">Output-root mode creates/uses: <code>1_good</code>, <code>2_rejected</code>, <code>3_bad</code>, <code>DELETE</code>.</p>
+        <div class="divider"></div>
+        <button id="selectGoodBtn">Set 1 / Good folder</button>
+        <button id="selectRejectedBtn">Set 2 / Rejected folder</button>
+        <button id="selectBadBtn">Set 3 / Bad folder</button>
+        <button id="restoreHandlesBtn">Restore saved folder permissions</button>
+      </section>
+
+      <section class="card">
+        <h2>Sort mode</h2>
+        <label class="toggle-line">
+          <input type="radio" name="sortMode" value="copy" checked />
+          <span>Copy files <em class="muted">safer default</em></span>
+        </label>
+        <label class="toggle-line">
+          <input type="radio" name="sortMode" value="move" />
+          <span>Move files <em class="muted">copy then delete source</em></span>
+        </label>
+      </section>
+
+      <section class="card">
+        <h2>Hotkeys</h2>
+        <div class="hotkey-grid">
+          <span><kbd>1</kbd> Good</span>
+          <span><kbd>2</kbd> Rejected</span>
+          <span><kbd>3</kbd> Bad</span>
+          <span><kbd>A</kbd>/<kbd>←</kbd> Prev</span>
+          <span><kbd>D</kbd>/<kbd>→</kbd> Next</span>
+          <span><kbd>Space</kbd> Skip</span>
+          <span><kbd>Ctrl</kbd>+<kbd>Z</kbd> Undo</span>
+          <span><kbd>G</kbd> Gallery</span>
+          <span><kbd>N</kbd> Filename</span>
+          <span><kbd>F11</kbd> Fullscreen</span>
+          <span><kbd>`</kbd> DELETE_</span>
+          <span><kbd>+/-</kbd> Zoom thumbs</span>
+        </div>
+      </section>
+
+      <section class="card">
+        <h2>Search</h2>
+        <input id="searchInput" type="search" placeholder="filename terms; separate with /" autocomplete="off" />
+        <label class="toggle-line compact">
+          <input id="caseSensitive" type="checkbox" />
+          <span>Case sensitive</span>
+        </label>
+      </section>
+
+      <section class="card">
+        <h2>Labels</h2>
+        <label>1 folder label<input id="labelGood" type="text" value="Good" /></label>
+        <label>2 folder label<input id="labelRejected" type="text" value="Rejected" /></label>
+        <label>3 folder label<input id="labelBad" type="text" value="Bad" /></label>
+        <button id="saveSettingsBtn">Save UI settings</button>
+      </section>
+
+      <section class="card status-card">
+        <h2>Status</h2>
+        <p id="currentFile">Name: —</p>
+        <p id="pictureCounter">Picture: 0/0</p>
+        <p id="remainingCounter">Images remaining: 0</p>
+        <p id="modeStatus">Mode: single image</p>
+        <p id="folderStatus">Folders: none selected</p>
+        <p id="timerStatus">No action yet</p>
+      </section>
+
+      <section class="card stats-card">
+        <h2>Key counts</h2>
+        <p id="stats1h">1h Presses - 1: 0 2: 0 3: 0 All: 0</p>
+        <p id="stats4h">4h Presses - 1: 0 2: 0 3: 0 All: 0</p>
+        <p id="stats24h">24h Presses - 1: 0 2: 0 3: 0 All: 0</p>
+      </section>
+
+      <section class="card action-card">
+        <h2>Actions</h2>
+        <button id="galleryBtn">Toggle gallery</button>
+        <button id="prevBtn">Previous</button>
+        <button id="nextBtn">Next</button>
+        <button id="undoBtn">Undo last action</button>
+        <button id="rescanBtn">Rescan source folder</button>
+        <button id="clearSessionBtn" class="danger">Clear local app data</button>
+      </section>
+    </aside>
+  </main>
+
+  <button id="showUiBtn" class="show-ui hidden">Show UI</button>
+  <div id="toastRegion" class="toast-region" aria-live="polite" aria-atomic="true"></div>
+
+  <script src="app.js"></script>
+</body>
+</html>

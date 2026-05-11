@@ -1,0 +1,24 @@
+# OS/editor junk
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Python junk from old desktop app/env dumps
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+venv/
+.env/
+Lib/
+Scripts/
+Include/
+pyvenv.cfg
+*.exe
+
+# Logs/local app data
+*.log
+key_press_log.json
+config_*.json
+recent_configs.json
