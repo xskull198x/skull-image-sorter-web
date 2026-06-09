@@ -9,7 +9,7 @@
 const IMAGE_EXTENSIONS = new Set(['.jpg', '.jpeg', '.png', '.webp', '.gif', '.bmp', '.avif']);
 const OUTPUT_DEFAULTS = {
   good: '1_good',
-  rejected: '2_rejected',
+  rejected: '2_flawed',
   bad: '3_bad',
   delete: 'DELETE'
 };
@@ -17,6 +17,7 @@ const SETTINGS_KEY = 'skullImageSorter.settings.v1';
 const KEY_LOG_KEY = 'skullImageSorter.keyLog.v1';
 const DB_NAME = 'skullImageSorter.handles.v1';
 const DB_STORE = 'handles';
+const PNG_SIGNATURE = [137, 80, 78, 71, 13, 10, 26, 10];
 
 const $ = (id) => document.getElementById(id);
 
@@ -26,8 +27,13 @@ const el = {
   dropZone: $('dropZone'),
   emptySelectSource: $('emptySelectSource'),
   singleViewer: $('singleViewer'),
+  imageStage: $('imageStage'),
   galleryViewer: $('galleryViewer'),
+  galleryGrid: $('galleryGrid'),
+  gallerySearchInput: $('gallerySearchInput'),
+  gallerySearchMode: $('gallerySearchMode'),
   mainImage: $('mainImage'),
+  pngInfoBox: $('pngInfoBox'),
   sidebar: $('sidebar'),
   hideUiBtn: $('hideUiBtn'),
   showUiBtn: $('showUiBtn'),
@@ -39,6 +45,7 @@ const el = {
   selectRejectedBtn: $('selectRejectedBtn'),
   selectBadBtn: $('selectBadBtn'),
   restoreHandlesBtn: $('restoreHandlesBtn'),
+  loadOrder: $('loadOrder'),
   searchInput: $('searchInput'),
   caseSensitive: $('caseSensitive'),
   labelGood: $('labelGood'),
@@ -55,6 +62,7 @@ const el = {
   stats4h: $('stats4h'),
   stats24h: $('stats24h'),
   galleryBtn: $('galleryBtn'),
+  pngInfoBtn: $('pngInfoBtn'),
   prevBtn: $('prevBtn'),
   nextBtn: $('nextBtn'),
   undoBtn: $('undoBtn'),
@@ -79,6 +87,13 @@ const state = {
   objectUrl: null,
   showFilename: true,
   galleryMode: false,
+  pngInfoEnabled: false,
+  pngInfoCache: new Map(),
+  pngRawInfoCache: new Map(),
+  pngInfoLoading: new Set(),
+  gallerySearchQuery: '',
+  gallerySearchMode: 'tag',
+  galleryRenderToken: 0,
   thumbSize: 150,
   imageZoom: 1,
   imageOffset: { x: 0, y: 0 },
@@ -88,9 +103,10 @@ const state = {
   lastAction: null,
   settings: {
     sortMode: 'copy',
+    loadOrder: 'name',
     labels: {
       good: 'Good',
-      rejected: 'Rejected',
+      rejected: 'Flawed',
       bad: 'Bad'
     },
     caseSensitive: false
@@ -115,6 +131,18 @@ function isImageName(name) {
   return IMAGE_EXTENSIONS.has(getExtension(name));
 }
 
+async function readImageDimensions(file) {
+  if (!('createImageBitmap' in window)) return { width: 0, height: 0 };
+  try {
+    const bitmap = await createImageBitmap(file);
+    const dimensions = { width: bitmap.width, height: bitmap.height };
+    bitmap.close();
+    return dimensions;
+  } catch {
+    return { width: 0, height: 0 };
+  }
+}
+
 function formatBytes(bytes) {
   if (!Number.isFinite(bytes)) return '—';
   const units = ['B', 'KB', 'MB', 'GB'];
@@ -125,6 +153,84 @@ function formatBytes(bytes) {
     idx += 1;
   }
   return `${value.toFixed(idx === 0 ? 0 : 1)} ${units[idx]}`;
+}
+
+function decodeLatin1(bytes) {
+  return Array.from(bytes, (byte) => String.fromCharCode(byte)).join('');
+}
+
+function decodeUtf8(bytes) {
+  return new TextDecoder('utf-8', { fatal: false }).decode(bytes);
+}
+
+function bytesMatch(bytes, expected) {
+  return expected.every((value, index) => bytes[index] === value);
+}
+
+function readUint32(bytes, offset) {
+  return ((bytes[offset] << 24) | (bytes[offset + 1] << 16) | (bytes[offset + 2] << 8) | bytes[offset + 3]) >>> 0;
+}
+
+async function inflateZlibBytes(bytes) {
+  if (!('DecompressionStream' in window)) return '[compressed text: browser cannot decompress zlib data]';
+  const stream = new Blob([bytes]).stream().pipeThrough(new DecompressionStream('deflate'));
+  const buffer = await new Response(stream).arrayBuffer();
+  return decodeUtf8(new Uint8Array(buffer));
+}
+
+async function extractPngInfoFromFile(file) {
+  if (!file || !file.name.toLowerCase().endsWith('.png')) {
+    return 'PNG info is only available for PNG files.';
+  }
+
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  if (bytes.length < PNG_SIGNATURE.length || !bytesMatch(bytes, PNG_SIGNATURE)) {
+    return 'This file has a .png name but does not contain a valid PNG signature.';
+  }
+
+  const chunks = [];
+  let offset = PNG_SIGNATURE.length;
+  while (offset + 12 <= bytes.length) {
+    const length = readUint32(bytes, offset);
+    const type = decodeLatin1(bytes.slice(offset + 4, offset + 8));
+    const dataStart = offset + 8;
+    const dataEnd = dataStart + length;
+    if (dataEnd + 4 > bytes.length) break;
+
+    const data = bytes.slice(dataStart, dataEnd);
+    if (type === 'tEXt') {
+      const sep = data.indexOf(0);
+      const key = sep >= 0 ? decodeLatin1(data.slice(0, sep)) : 'Text';
+      const value = sep >= 0 ? decodeLatin1(data.slice(sep + 1)) : decodeLatin1(data);
+      chunks.push(`${key}: ${value}`);
+    } else if (type === 'zTXt') {
+      const sep = data.indexOf(0);
+      if (sep >= 0 && data[sep + 1] === 0) {
+        const key = decodeLatin1(data.slice(0, sep));
+        const value = await inflateZlibBytes(data.slice(sep + 2));
+        chunks.push(`${key}: ${value}`);
+      }
+    } else if (type === 'iTXt') {
+      const keyEnd = data.indexOf(0);
+      if (keyEnd >= 0) {
+        const key = decodeLatin1(data.slice(0, keyEnd));
+        const compressionFlag = data[keyEnd + 1];
+        let cursor = keyEnd + 3;
+        const languageEnd = data.indexOf(0, cursor);
+        cursor = languageEnd >= 0 ? languageEnd + 1 : cursor;
+        const translatedEnd = data.indexOf(0, cursor);
+        cursor = translatedEnd >= 0 ? translatedEnd + 1 : cursor;
+        const textBytes = data.slice(cursor);
+        const value = compressionFlag === 1 ? await inflateZlibBytes(textBytes) : decodeUtf8(textBytes);
+        chunks.push(`${key}: ${value}`);
+      }
+    }
+
+    offset = dataEnd + 4;
+    if (type === 'IEND') break;
+  }
+
+  return chunks.length ? chunks.join('\n\n') : 'No textual PNG metadata was found.';
 }
 
 function safeName(name) {
@@ -214,6 +320,7 @@ async function scanImagesFromFolder(directoryHandle) {
     if (handle.kind !== 'file' || !isImageName(name)) continue;
     try {
       const file = await handle.getFile();
+      const dimensions = await readImageDimensions(file);
       images.push({
         name,
         path: name,
@@ -221,14 +328,36 @@ async function scanImagesFromFolder(directoryHandle) {
         parentHandle: directoryHandle,
         size: file.size,
         lastModified: file.lastModified,
-        type: file.type || 'image/unknown'
+        type: file.type || 'image/unknown',
+        width: dimensions.width,
+        height: dimensions.height,
+        ratio: dimensions.width && dimensions.height ? dimensions.width / dimensions.height : 0
       });
     } catch (err) {
       console.warn('Skipping unreadable image:', name, err);
     }
   }
-  images.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' }));
+  sortImages(images);
   return images;
+}
+
+function sortImages(images) {
+  const byName = (a, b) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' });
+  switch (state.settings.loadOrder) {
+    case 'date':
+      images.sort((a, b) => a.lastModified - b.lastModified || byName(a, b));
+      break;
+    case 'size':
+      images.sort((a, b) => a.size - b.size || byName(a, b));
+      break;
+    case 'ratio':
+      images.sort((a, b) => a.ratio - b.ratio || byName(a, b));
+      break;
+    case 'name':
+    default:
+      images.sort(byName);
+      break;
+  }
 }
 
 function applySettingsToUi() {
@@ -238,9 +367,12 @@ function applySettingsToUi() {
     ...settings,
     labels: { ...state.settings.labels, ...(settings.labels || {}) }
   };
+  if (state.settings.labels.rejected === 'Rejected') state.settings.labels.rejected = 'Flawed';
+  state.settings.loadOrder = state.settings.loadOrder || 'name';
   el.labelGood.value = state.settings.labels.good;
   el.labelRejected.value = state.settings.labels.rejected;
   el.labelBad.value = state.settings.labels.bad;
+  el.loadOrder.value = state.settings.loadOrder || 'name';
   el.caseSensitive.checked = !!state.settings.caseSensitive;
   const modeInput = document.querySelector(`input[name="sortMode"][value="${state.settings.sortMode}"]`);
   if (modeInput) modeInput.checked = true;
@@ -248,9 +380,10 @@ function applySettingsToUi() {
 
 function saveSettingsFromUi() {
   state.settings.labels.good = safeName(el.labelGood.value || 'Good');
-  state.settings.labels.rejected = safeName(el.labelRejected.value || 'Rejected');
+  state.settings.labels.rejected = safeName(el.labelRejected.value || 'Flawed');
   state.settings.labels.bad = safeName(el.labelBad.value || 'Bad');
   state.settings.caseSensitive = el.caseSensitive.checked;
+  state.settings.loadOrder = el.loadOrder.value;
   state.settings.sortMode = document.querySelector('input[name="sortMode"]:checked')?.value || 'copy';
   saveJson(SETTINGS_KEY, state.settings);
   toast('UI settings saved.', 'good');
@@ -319,6 +452,86 @@ function currentImage() {
   return state.filteredImages[state.currentIndex] || null;
 }
 
+async function getPngInfo(image) {
+  if (!image) return 'No image selected.';
+  if (state.pngInfoCache.has(image.path)) return state.pngInfoCache.get(image.path);
+  if (state.pngInfoLoading.has(image.path)) return 'Loading PNG info...';
+
+  state.pngInfoLoading.add(image.path);
+  try {
+    const file = await image.handle.getFile();
+    const rawInfo = await extractPngInfoFromFile(file);
+    state.pngRawInfoCache.set(image.path, rawInfo);
+    const info = window.PngInfoFormatter
+      ? window.PngInfoFormatter.formatPngInfo(rawInfo, window.RPE_PRESETS || {})
+      : rawInfo;
+    state.pngInfoCache.set(image.path, info);
+    return info;
+  } catch (err) {
+    const message = `Could not read PNG info: ${err.message}`;
+    state.pngInfoCache.set(image.path, message);
+    return message;
+  } finally {
+    state.pngInfoLoading.delete(image.path);
+  }
+}
+
+function shouldShowPngInfo() {
+  return state.pngInfoEnabled && !state.galleryMode;
+}
+
+async function updatePngInfoBox() {
+  el.pngInfoBtn.classList.toggle('active', state.pngInfoEnabled);
+  el.pngInfoBox.classList.toggle('hidden', !shouldShowPngInfo());
+  if (!shouldShowPngInfo()) return;
+
+  const image = currentImage();
+  el.pngInfoBox.value = 'Loading PNG info...';
+  const info = await getPngInfo(image);
+  if (image === currentImage() && shouldShowPngInfo()) {
+    el.pngInfoBox.value = info;
+    updatePngInfoLayout();
+  }
+}
+
+function updatePngInfoLayout() {
+  if (!shouldShowPngInfo()) {
+    el.singleViewer.classList.remove('png-info-dominant');
+    fitImageToStage();
+    return;
+  }
+  const viewerHeight = Math.max(1, el.singleViewer.clientHeight);
+  const boxHeight = el.pngInfoBox.offsetHeight;
+  el.singleViewer.classList.toggle('png-info-dominant', boxHeight / viewerHeight >= 0.58);
+  fitImageToStage();
+}
+
+async function togglePngInfo() {
+  state.pngInfoEnabled = !state.pngInfoEnabled;
+  await updatePngInfoBox();
+}
+
+function fitImageToStage() {
+  if (!el.mainImage.naturalWidth || !el.mainImage.naturalHeight) return;
+
+  const stageWidth = el.imageStage.clientWidth;
+  const stageHeight = el.imageStage.clientHeight;
+  if (!stageWidth || !stageHeight) return;
+
+  const imageRatio = el.mainImage.naturalWidth / el.mainImage.naturalHeight;
+  const stageRatio = stageWidth / stageHeight;
+
+  if (imageRatio >= stageRatio) {
+    el.mainImage.style.width = `${stageWidth}px`;
+    el.mainImage.style.height = 'auto';
+  } else {
+    el.mainImage.style.width = 'auto';
+    el.mainImage.style.height = `${stageHeight}px`;
+  }
+
+  applyImageTransform();
+}
+
 function revokeObjectUrl() {
   if (state.objectUrl) {
     URL.revokeObjectURL(state.objectUrl);
@@ -332,6 +545,7 @@ async function renderCurrentImage() {
     revokeObjectUrl();
     el.mainImage.removeAttribute('src');
     el.dropZone.classList.remove('hidden');
+    await updatePngInfoBox();
     updateStatus();
     return;
   }
@@ -343,10 +557,11 @@ async function renderCurrentImage() {
     state.objectUrl = URL.createObjectURL(file);
     el.mainImage.src = state.objectUrl;
     el.mainImage.alt = image.name;
-    resetImageTransform();
+    if (el.mainImage.complete) resetImageTransform();
   } catch (err) {
     toast(`Could not load ${image.name}: ${err.message}`, 'bad');
   }
+  await updatePngInfoBox();
   updateStatus();
 }
 
@@ -362,12 +577,12 @@ function updateStatus() {
   el.currentFile.textContent = image && state.showFilename ? `Name: ${image.name} (${formatBytes(image.size)})` : 'Name: —';
   el.pictureCounter.textContent = `Picture: ${total ? state.currentIndex + 1 : 0}/${total}`;
   el.remainingCounter.textContent = `Images remaining: ${total}`;
-  el.modeStatus.textContent = `Mode: ${state.galleryMode ? 'gallery' : 'single image'} / ${state.settings.sortMode}`;
+  el.modeStatus.textContent = `Mode: ${state.galleryMode ? 'gallery' : 'single image'} / ${state.settings.sortMode} / ${state.settings.loadOrder}`;
   el.folderStatus.textContent = `Source: ${sourceName} | 1: ${good} | 2: ${rejected} | 3: ${bad}`;
 
-  el.selectGoodBtn.textContent = `Set 1 / ${state.settings.labels.good} folder`;
-  el.selectRejectedBtn.textContent = `Set 2 / ${state.settings.labels.rejected} folder`;
-  el.selectBadBtn.textContent = `Set 3 / ${state.settings.labels.bad} folder`;
+  el.selectGoodBtn.textContent = `Set Folder #1 / ${state.settings.labels.good}`;
+  el.selectRejectedBtn.textContent = `Set Folder #2 / ${state.settings.labels.rejected}`;
+  el.selectBadBtn.textContent = `Set Folder #3 / ${state.settings.labels.bad}`;
 }
 
 function updateTimer() {
@@ -474,6 +689,9 @@ async function rescanSource(showToast = true) {
   const ok = await verifyPermission(state.sourceHandle, 'readwrite');
   if (!ok) throw new Error('Source folder permission denied.');
   state.allImages = await scanImagesFromFolder(state.sourceHandle);
+  state.pngInfoCache.clear();
+  state.pngRawInfoCache.clear();
+  state.pngInfoLoading.clear();
   state.currentIndex = 0;
   state.selectedPaths.clear();
   filterImages();
@@ -654,16 +872,52 @@ function toggleGallery() {
   state.galleryMode = !state.galleryMode;
   el.galleryViewer.classList.toggle('hidden', !state.galleryMode);
   el.singleViewer.classList.toggle('hidden', state.galleryMode);
+  el.gallerySearchInput.value = state.gallerySearchQuery;
+  el.gallerySearchMode.value = state.gallerySearchMode;
   if (state.galleryMode) renderGallery();
+  updatePngInfoBox();
   updateStatus();
 }
 
-function renderGallery(scrollCurrent = true) {
-  el.galleryViewer.style.setProperty('--thumb-size', `${state.thumbSize}px`);
+function galleryMatchesSearch(image) {
+  const query = state.gallerySearchQuery.trim();
+  if (!query) return true;
+
+  const terms = query.split('/').map((part) => part.trim()).filter(Boolean);
+  if (!terms.length) return true;
+
+  if (state.gallerySearchMode === 'filename') {
+    const hay = image.name.toLowerCase();
+    return terms.every((term) => hay.includes(term.toLowerCase()));
+  }
+
+  const cached = state.pngInfoCache.get(image.path);
+  if (!cached) return false;
+  const hay = cached.toLowerCase();
+  return terms.every((term) => hay.includes(term.toLowerCase()));
+}
+
+function galleryImages() {
+  return state.filteredImages.filter(galleryMatchesSearch);
+}
+
+async function warmGalleryTagSearch(token) {
+  if (state.gallerySearchMode !== 'tag' || !state.gallerySearchQuery.trim()) return;
+
+  const pngImages = state.filteredImages.filter((image) => image.name.toLowerCase().endsWith('.png'));
+  await Promise.all(pngImages.map((image) => getPngInfo(image)));
+  if (state.galleryMode && token === state.galleryRenderToken) renderGallery(false, true);
+}
+
+function renderGallery(scrollCurrent = true, skipWarm = false) {
+  const token = ++state.galleryRenderToken;
+  el.galleryGrid.style.setProperty('--thumb-size', `${state.thumbSize}px`);
   const frag = document.createDocumentFragment();
   const current = currentImage();
+  const images = galleryImages();
 
-  state.filteredImages.forEach((image, index) => {
+  images.forEach((image) => {
+    const index = state.filteredImages.indexOf(image);
     const wrapper = document.createElement('div');
     wrapper.className = 'thumb';
     if (state.selectedPaths.has(image.path)) wrapper.classList.add('selected');
@@ -692,22 +946,32 @@ function renderGallery(scrollCurrent = true) {
       if (event.shiftKey || event.ctrlKey || event.metaKey) {
         if (state.selectedPaths.has(image.path)) state.selectedPaths.delete(image.path);
         else state.selectedPaths.add(image.path);
+        renderGallery(false);
       } else {
         state.currentIndex = index;
         state.selectedPaths.clear();
+        if (state.galleryMode) toggleGallery();
+        renderCurrentImage();
       }
-      renderGallery(false);
-      renderCurrentImage();
     });
     frag.appendChild(wrapper);
   });
 
-  el.galleryViewer.replaceChildren(frag);
+  if (!images.length) {
+    const empty = document.createElement('div');
+    empty.className = 'gallery-empty';
+    empty.textContent = state.gallerySearchQuery.trim() ? 'No gallery results.' : 'No images to show.';
+    frag.appendChild(empty);
+  }
+
+  el.galleryGrid.replaceChildren(frag);
 
   if (scrollCurrent && current) {
-    const node = el.galleryViewer.querySelector(`[data-path="${CSS.escape(current.path)}"]`);
+    const node = el.galleryGrid.querySelector(`[data-path="${CSS.escape(current.path)}"]`);
     if (node) node.scrollIntoView({ block: 'nearest', inline: 'nearest' });
   }
+
+  if (!skipWarm) warmGalleryTagSearch(token);
 }
 
 function zoomGallery(delta) {
@@ -719,6 +983,7 @@ function zoomGallery(delta) {
 function resetImageTransform() {
   state.imageZoom = 1;
   state.imageOffset = { x: 0, y: 0 };
+  fitImageToStage();
   applyImageTransform();
 }
 
@@ -737,6 +1002,8 @@ function zoomSingleImage(event) {
 
 function startPan(event) {
   if (state.galleryMode || event.button !== 0) return;
+  if (event.target === el.pngInfoBox || event.target.closest?.('#pngInfoBox')) return;
+  if (!event.target.closest?.('#imageStage') && event.target !== el.mainImage) return;
   state.isPanning = true;
   state.panStart = {
     x: event.clientX - state.imageOffset.x,
@@ -761,6 +1028,10 @@ function endPan() {
 function toggleUi() {
   document.body.classList.toggle('ui-hidden');
   el.showUiBtn.classList.toggle('hidden', !document.body.classList.contains('ui-hidden'));
+  requestAnimationFrame(() => {
+    resetImageTransform();
+    updatePngInfoLayout();
+  });
 }
 
 async function clearSessionData() {
@@ -801,6 +1072,12 @@ function bindEvents() {
   el.selectBadBtn.addEventListener('click', () => selectOutputFolder('bad'));
   el.restoreHandlesBtn.addEventListener('click', restoreSavedHandles);
   el.saveSettingsBtn.addEventListener('click', saveSettingsFromUi);
+  el.loadOrder.addEventListener('change', async () => {
+    state.settings.loadOrder = el.loadOrder.value;
+    saveJson(SETTINGS_KEY, state.settings);
+    if (state.sourceHandle) await rescanSource(true);
+    else updateStatus();
+  });
   el.searchInput.addEventListener('input', filterImages);
   el.caseSensitive.addEventListener('change', () => { saveSettingsFromUi(); filterImages(); });
   for (const input of document.querySelectorAll('input[name="sortMode"]')) {
@@ -810,6 +1087,26 @@ function bindEvents() {
     input.addEventListener('change', saveSettingsFromUi);
   }
   el.galleryBtn.addEventListener('click', toggleGallery);
+  el.pngInfoBtn.addEventListener('click', togglePngInfo);
+  el.pngInfoBox.addEventListener('input', updatePngInfoLayout);
+  el.pngInfoBox.addEventListener('mouseup', updatePngInfoLayout);
+  el.pngInfoBox.addEventListener('keyup', updatePngInfoLayout);
+  el.pngInfoBox.addEventListener('pointerdown', (event) => event.stopPropagation());
+  el.pngInfoBox.addEventListener('pointermove', (event) => event.stopPropagation());
+  el.pngInfoBox.addEventListener('pointerup', (event) => event.stopPropagation());
+  el.pngInfoBox.addEventListener('wheel', (event) => event.stopPropagation());
+  window.addEventListener('resize', () => {
+    resetImageTransform();
+    updatePngInfoLayout();
+  });
+  el.gallerySearchInput.addEventListener('input', () => {
+    state.gallerySearchQuery = el.gallerySearchInput.value;
+    if (state.galleryMode) renderGallery(false);
+  });
+  el.gallerySearchMode.addEventListener('change', () => {
+    state.gallerySearchMode = el.gallerySearchMode.value;
+    if (state.galleryMode) renderGallery(false);
+  });
   el.prevBtn.addEventListener('click', prevImage);
   el.nextBtn.addEventListener('click', nextImage);
   el.undoBtn.addEventListener('click', undoLastAction);
@@ -823,6 +1120,7 @@ function bindEvents() {
   el.singleViewer.addEventListener('pointermove', movePan);
   el.singleViewer.addEventListener('pointerup', endPan);
   el.singleViewer.addEventListener('pointercancel', endPan);
+  el.mainImage.addEventListener('load', resetImageTransform);
   el.mainImage.addEventListener('dblclick', resetImageTransform);
 
   window.addEventListener('keydown', async (event) => {
@@ -877,6 +1175,11 @@ function bindEvents() {
         event.preventDefault();
         toggleFilename();
         break;
+      case 'p':
+      case 'P':
+        event.preventDefault();
+        await togglePngInfo();
+        break;
       case 'h':
       case 'H':
         event.preventDefault();
@@ -903,6 +1206,7 @@ async function init() {
   updateStats();
   bindEvents();
   filterImages();
+  updatePngInfoBox();
   updateStatus();
   window.setInterval(() => {
     updateTimer();

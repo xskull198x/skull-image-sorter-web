@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Skull Image Sorter Web</title>
+  <title>Skull's Image Sorter/Png Info</title>
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
@@ -11,17 +11,48 @@
     <section id="viewerPanel" class="viewer-panel" aria-label="Image viewer">
       <div id="dropZone" class="drop-zone hidden">
         <div>
-          <h1>Skull Image Sorter Web</h1>
-          <p>Pick a source folder, then sort with <kbd>1</kbd>, <kbd>2</kbd>, or <kbd>3</kbd>. Files stay local. Nothing uploads.</p>
-          <button id="emptySelectSource" class="primary">Select source folder</button>
+          <h1>Skull's Image Sorter/Png Info</h1>
+          <p>Pick a source input folder, set output folders #1, #2, and #3, then sort with keys <kbd>1</kbd>, <kbd>2</kbd>, or <kbd>3</kbd>. Files stay local. Nothing uploads.</p>
+          <p class="tiny muted">Hotkeys displayed on the lower right.</p>
+          <div class="drop-hotkeys" aria-label="Hotkeys">
+            <h2>Hotkeys</h2>
+            <div class="hotkey-grid">
+              <span><kbd>1</kbd> Good</span>
+              <span><kbd>2</kbd> Rejected</span>
+              <span><kbd>3</kbd> Bad</span>
+              <span><kbd>A</kbd>/<kbd>←</kbd> Prev</span>
+              <span><kbd>D</kbd>/<kbd>→</kbd> Next</span>
+              <span><kbd>Space</kbd> Skip</span>
+              <span><kbd>Ctrl</kbd>+<kbd>Z</kbd> Undo</span>
+              <span><kbd>G</kbd> Gallery</span>
+              <span><kbd>N</kbd> Filename</span>
+              <span><kbd>H</kbd> Hide info pane</span>
+              <span><kbd>F11</kbd> Fullscreen</span>
+              <span><kbd>`</kbd> DELETE</span>
+              <span><kbd>+/-</kbd> or wheel Zoom thumbs</span>
+            </div>
+          </div>
+          <button id="emptySelectSource" class="primary">Select source input folder</button>
         </div>
       </div>
 
       <div id="singleViewer" class="single-viewer">
-        <img id="mainImage" alt="Current image" draggable="false" />
+        <div id="imageStage" class="image-stage">
+          <img id="mainImage" alt="Current image" draggable="false" />
+        </div>
+        <textarea id="pngInfoBox" class="png-info-box hidden" readonly spellcheck="false" aria-label="PNG info"></textarea>
       </div>
 
-      <div id="galleryViewer" class="gallery-viewer hidden" aria-label="Gallery view"></div>
+      <div id="galleryViewer" class="gallery-viewer hidden" aria-label="Gallery view">
+        <div id="gallerySearchBar" class="gallery-search-bar">
+          <input id="gallerySearchInput" type="search" placeholder="Search gallery" autocomplete="off" />
+          <select id="gallerySearchMode" aria-label="Gallery search mode">
+            <option value="tag">Search for tag</option>
+            <option value="filename">Search by filename</option>
+          </select>
+        </div>
+        <div id="galleryGrid" class="gallery-grid"></div>
+      </div>
     </section>
 
     <aside id="sidebar" class="sidebar" aria-label="Controls">
@@ -40,14 +71,26 @@
 
       <section class="card">
         <h2>Folders</h2>
-        <button id="selectSourceBtn" class="primary">Select source folder</button>
+        <button id="selectSourceBtn" class="primary">Select source input folder</button>
+        <label>Load input folder by
+          <select id="loadOrder">
+            <option value="name">Name</option>
+            <option value="date">Date</option>
+            <option value="size">Size</option>
+            <option value="ratio">Ratio</option>
+          </select>
+        </label>
         <button id="selectOutputRootBtn">Select one output root</button>
-        <p class="tiny muted">Output-root mode creates/uses: <code>1_good</code>, <code>2_rejected</code>, <code>3_bad</code>, <code>DELETE</code>.</p>
-        <div class="divider"></div>
-        <button id="selectGoodBtn">Set 1 / Good folder</button>
-        <button id="selectRejectedBtn">Set 2 / Rejected folder</button>
-        <button id="selectBadBtn">Set 3 / Bad folder</button>
+        <p class="section-label">Set Output Folders</p>
+        <button id="selectGoodBtn">Set Folder #1 / Good</button>
+        <button id="selectRejectedBtn">Set Folder #2 / Flawed</button>
+        <button id="selectBadBtn">Set Folder #3 / Bad</button>
         <button id="restoreHandlesBtn">Restore saved folder permissions</button>
+      </section>
+
+      <section class="card">
+        <h2>Display Png Info (Displays Used Tags)</h2>
+        <button id="pngInfoBtn" class="png-info-toggle" type="button">Png Info (P Key)</button>
       </section>
 
       <section class="card">
@@ -73,10 +116,12 @@
           <span><kbd>Space</kbd> Skip</span>
           <span><kbd>Ctrl</kbd>+<kbd>Z</kbd> Undo</span>
           <span><kbd>G</kbd> Gallery</span>
+          <span><kbd>P</kbd> PNG info</span>
           <span><kbd>N</kbd> Filename</span>
+          <span><kbd>H</kbd> Hide info pane</span>
           <span><kbd>F11</kbd> Fullscreen</span>
-          <span><kbd>`</kbd> DELETE_</span>
-          <span><kbd>+/-</kbd> Zoom thumbs</span>
+          <span><kbd>`</kbd> DELETE</span>
+          <span><kbd>+/-</kbd> or wheel Zoom thumbs</span>
         </div>
       </section>
 
@@ -92,7 +137,7 @@
       <section class="card">
         <h2>Labels</h2>
         <label>1 folder label<input id="labelGood" type="text" value="Good" /></label>
-        <label>2 folder label<input id="labelRejected" type="text" value="Rejected" /></label>
+        <label>2 folder label<input id="labelRejected" type="text" value="Flawed" /></label>
         <label>3 folder label<input id="labelBad" type="text" value="Bad" /></label>
         <button id="saveSettingsBtn">Save UI settings</button>
       </section>
@@ -129,6 +174,8 @@
   <button id="showUiBtn" class="show-ui hidden">Show UI</button>
   <div id="toastRegion" class="toast-region" aria-live="polite" aria-atomic="true"></div>
 
+  <script src="presets-data.js"></script>
+  <script src="png-info.js"></script>
   <script src="app.js"></script>
 </body>
 </html>
