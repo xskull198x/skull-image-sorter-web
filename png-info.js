@@ -6,6 +6,7 @@
   'use strict';
 
   const CATEGORY_ORDER = [
+    'Other',
     'Characters',
     'Bottoms',
     'Tops',
@@ -23,8 +24,7 @@
     'Hair',
     'Weather',
     'Lighting',
-    'Props',
-    'Other'
+    'Props'
   ];
 
   const PARAM_START_RE = /(?:^|\n|,\s*)(Steps|Sampler|Schedule type|CFG scale|Seed|Size|Model hash|Model|Soft Regional|ADetailer|Lora hashes|Version|NGMS|Module)\s*:/i;
