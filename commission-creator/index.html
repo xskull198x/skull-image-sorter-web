@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Skull Commission Creator</title>
+    <link rel="stylesheet" href="./styles.css?v=20260614-1" />
+  </head>
+  <body>
+    <main class="shell">
+      <header class="hero">
+        <div>
+          <p class="eyebrow">Public preset picker</p>
+          <h1>Skull's Commission Creator</h1>
+          <p class="lede">
+            Choose presets by gallery preview or text search, review the picks,
+            then export a ZIP to send to Skull.
+          </p>
+        </div>
+        <div class="mode-card" aria-label="Display mode">
+          <button id="galleryModeBtn" class="pill active" type="button">Gallery mode</button>
+          <button id="textModeBtn" class="pill" type="button">Text mode</button>
+        </div>
+      </header>
+
+      <section class="toolbar" aria-label="Preset controls">
+        <label class="search-wrap">
+          <span>Search current category</span>
+          <input id="searchInput" type="search" placeholder="Search preset names or tags..." autocomplete="off" />
+        </label>
+        <div class="toolbar-actions">
+          <button id="selectAllBtn" type="button">Select shown</button>
+          <button id="deselectAllBtn" type="button">Deselect shown</button>
+          <button id="reviewBtn" class="primary" type="button">Review & export</button>
+        </div>
+      </section>
+
+      <nav id="categoryTabs" class="tabs" aria-label="Preset categories"></nav>
+
+      <section class="content-grid">
+        <section class="preset-panel" aria-label="Preset list">
+          <div id="presetGrid" class="preset-grid"></div>
+          <p id="emptyState" class="empty-state" hidden>No presets match that search.</p>
+        </section>
+        <aside class="info-panel" aria-label="Preset info">
+          <div class="selection-summary">
+            <h2>Current preset</h2>
+            <p id="currentName">Pick a preset to inspect its tags.</p>
+          </div>
+          <pre id="tagBox" class="tag-box">No preset selected.</pre>
+          <div class="selection-summary">
+            <h2>Selected order</h2>
+            <ol id="selectedList" class="selected-list"></ol>
+          </div>
+        </aside>
+      </section>
+    </main>
+
+    <dialog id="reviewDialog" class="review-dialog">
+      <div class="review-layout">
+        <section>
+          <div class="dialog-heading">
+            <div>
+              <p class="eyebrow">Final check</p>
+              <h2>Review selected presets</h2>
+            </div>
+            <button id="closeReviewBtn" class="ghost" type="button">Close</button>
+          </div>
+          <nav id="reviewTabs" class="tabs review-tabs" aria-label="Review categories"></nav>
+          <div id="reviewContent" class="review-content"></div>
+        </section>
+        <aside class="warning-panel">
+          <h3>Empty categories</h3>
+          <p id="emptyCategoryWarning"></p>
+          <button id="exportBtn" class="primary export" type="button">Export ZIP</button>
+          <p class="export-note">
+            Export successful? Please download the ZIP and send it to Skull.
+          </p>
+        </aside>
+      </div>
+    </dialog>
+
+    <script src="./data/manifest.js?v=20260614-1"></script>
+    <script src="./app.js?v=20260614-1"></script>
+  </body>
+</html>
