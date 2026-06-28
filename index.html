@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Skull's Image Sorter/Png Info</title>
-  <link rel="stylesheet" href="styles.css?v=20260627-1" />
+  <link rel="stylesheet" href="styles.css?v=20260627-2" />
 </head>
 <body>
   <main id="app" class="app-shell">
@@ -58,11 +58,13 @@
     <aside id="sidebar" class="sidebar" aria-label="Controls">
       <div class="brand-row">
         <div>
-          <h1>Image Sorter</h1>
+          <h1 id="appTitle">Image Sorter v2.1</h1>
           <p class="muted">Local-only browser version</p>
         </div>
         <button id="hideUiBtn" title="Hide sidebar">H</button>
       </div>
+
+      <button id="versionLogBtn" class="version-log-button" type="button">Version Log</button>
 
       <section class="card warning-card" id="compatWarning">
         <strong>Browser check</strong>
@@ -174,8 +176,21 @@
   <button id="showUiBtn" class="show-ui hidden">Show UI</button>
   <div id="toastRegion" class="toast-region" aria-live="polite" aria-atomic="true"></div>
 
-  <script src="presets-data.js?v=20260627-1"></script>
-  <script src="png-info.js?v=20260627-1"></script>
-  <script src="app.js?v=20260627-1"></script>
+  <div id="versionLogOverlay" class="modal-overlay hidden" role="presentation">
+    <section class="version-log-modal" role="dialog" aria-modal="true" aria-labelledby="versionLogTitle">
+      <div class="modal-header">
+        <div>
+          <h2 id="versionLogTitle">Version Log</h2>
+          <p class="muted">Plain-English notes for each Image Sorter update.</p>
+        </div>
+        <button id="closeVersionLogBtn" type="button">Close</button>
+      </div>
+      <div id="versionLogContent" class="version-log-content"></div>
+    </section>
+  </div>
+
+  <script src="presets-data.js?v=20260627-2"></script>
+  <script src="png-info.js?v=20260627-2"></script>
+  <script src="app.js?v=20260627-2"></script>
 </body>
 </html>

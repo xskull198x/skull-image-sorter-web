@@ -19,6 +19,20 @@ const DB_NAME = 'skullImageSorter.handles.v1';
 const DB_STORE = 'handles';
 const PNG_SIGNATURE = [137, 80, 78, 71, 13, 10, 26, 10];
 const DIMENSION_SCAN_CONCURRENCY = Math.max(2, Math.min(8, navigator.hardwareConcurrency ? Math.floor(navigator.hardwareConcurrency / 2) : 4));
+const APP_VERSION = 'v2.1';
+const VERSION_LOG = [
+  {
+    version: 'v2.1',
+    date: '2026-06-27',
+    title: 'Large folder loading and file reliability',
+    notes: [
+      'Big folders should open faster because the app no longer fully checks every high-res picture up front.',
+      'Sorting by ratio still works, but ratio checks now run only when you choose ratio sorting.',
+      'Gallery mode is lighter because thumbnails load as you scroll instead of loading the whole folder at once.',
+      'If the browser says a picture vanished even though it is still there, the app now retries by finding that file again from the selected folder.'
+    ]
+  }
+];
 
 const $ = (id) => document.getElementById(id);
 
@@ -36,8 +50,13 @@ const el = {
   mainImage: $('mainImage'),
   pngInfoBox: $('pngInfoBox'),
   sidebar: $('sidebar'),
+  appTitle: $('appTitle'),
   hideUiBtn: $('hideUiBtn'),
   showUiBtn: $('showUiBtn'),
+  versionLogBtn: $('versionLogBtn'),
+  versionLogOverlay: $('versionLogOverlay'),
+  closeVersionLogBtn: $('closeVersionLogBtn'),
+  versionLogContent: $('versionLogContent'),
   compatWarning: $('compatWarning'),
   compatText: $('compatText'),
   selectSourceBtn: $('selectSourceBtn'),
@@ -122,6 +141,46 @@ function toast(message, type = '') {
   node.textContent = message;
   el.toastRegion.appendChild(node);
   window.setTimeout(() => node.remove(), 4200);
+}
+
+function renderVersionLog() {
+  const frag = document.createDocumentFragment();
+  for (const entry of VERSION_LOG) {
+    const section = document.createElement('section');
+    section.className = 'version-log-entry';
+
+    const heading = document.createElement('h3');
+    heading.textContent = `${entry.version} - ${entry.title}`;
+    section.appendChild(heading);
+
+    const date = document.createElement('p');
+    date.className = 'tiny muted';
+    date.textContent = entry.date;
+    section.appendChild(date);
+
+    const list = document.createElement('ul');
+    for (const note of entry.notes) {
+      const item = document.createElement('li');
+      item.textContent = note;
+      list.appendChild(item);
+    }
+    section.appendChild(list);
+    frag.appendChild(section);
+  }
+  el.versionLogContent.replaceChildren(frag);
+}
+
+function openVersionLog() {
+  renderVersionLog();
+  el.versionLogOverlay.classList.remove('hidden');
+}
+
+function closeVersionLog() {
+  el.versionLogOverlay.classList.add('hidden');
+}
+
+function isVersionLogOpen() {
+  return !el.versionLogOverlay.classList.contains('hidden');
 }
 
 function getExtension(name) {
@@ -1196,6 +1255,11 @@ function bindEvents() {
   el.clearSessionBtn.addEventListener('click', clearSessionData);
   el.hideUiBtn.addEventListener('click', toggleUi);
   el.showUiBtn.addEventListener('click', toggleUi);
+  el.versionLogBtn.addEventListener('click', openVersionLog);
+  el.closeVersionLogBtn.addEventListener('click', closeVersionLog);
+  el.versionLogOverlay.addEventListener('click', (event) => {
+    if (event.target === el.versionLogOverlay) closeVersionLog();
+  });
 
   el.singleViewer.addEventListener('wheel', zoomSingleImage, { passive: false });
   el.singleViewer.addEventListener('pointerdown', startPan);
@@ -1206,6 +1270,10 @@ function bindEvents() {
   el.mainImage.addEventListener('dblclick', resetImageTransform);
 
   window.addEventListener('keydown', async (event) => {
+    if (isVersionLogOpen()) {
+      if (event.key === 'Escape') closeVersionLog();
+      return;
+    }
     if (isTypingTarget(event.target)) return;
 
     if (event.ctrlKey && event.key.toLowerCase() === 'z') {
@@ -1282,6 +1350,7 @@ function bindEvents() {
 }
 
 async function init() {
+  el.appTitle.textContent = `Image Sorter ${APP_VERSION}`;
   setCompatStatus();
   applySettingsToUi();
   loadKeyLog();
