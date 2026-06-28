@@ -18,6 +18,7 @@ const KEY_LOG_KEY = 'skullImageSorter.keyLog.v1';
 const DB_NAME = 'skullImageSorter.handles.v1';
 const DB_STORE = 'handles';
 const PNG_SIGNATURE = [137, 80, 78, 71, 13, 10, 26, 10];
+const DIMENSION_SCAN_CONCURRENCY = Math.max(2, Math.min(8, navigator.hardwareConcurrency ? Math.floor(navigator.hardwareConcurrency / 2) : 4));
 
 const $ = (id) => document.getElementById(id);
 
@@ -94,6 +95,7 @@ const state = {
   gallerySearchQuery: '',
   gallerySearchMode: 'tag',
   galleryRenderToken: 0,
+  galleryThumbObserver: null,
   thumbSize: 150,
   imageZoom: 1,
   imageOffset: { x: 0, y: 0 },
@@ -314,13 +316,31 @@ async function getOrCreateSubdir(parentHandle, name) {
   return parentHandle.getDirectoryHandle(name, { create: true });
 }
 
+async function refreshImageHandle(image, mode = 'read') {
+  if (!image?.parentHandle || !image?.name) return image?.handle || null;
+  const ok = await verifyPermission(image.parentHandle, mode);
+  if (!ok) throw new Error(`Folder permission was not granted for ${image.name}.`);
+  image.handle = await image.parentHandle.getFileHandle(image.name, { create: false });
+  return image.handle;
+}
+
+async function getImageFile(image) {
+  if (!image?.handle) throw new Error(`Missing file handle for ${image?.name || 'image'}.`);
+  try {
+    return await image.handle.getFile();
+  } catch (err) {
+    if (!['NotFoundError', 'NotReadableError'].includes(err.name)) throw err;
+    const handle = await refreshImageHandle(image);
+    return handle.getFile();
+  }
+}
+
 async function scanImagesFromFolder(directoryHandle) {
   const images = [];
   for await (const [name, handle] of directoryHandle.entries()) {
     if (handle.kind !== 'file' || !isImageName(name)) continue;
     try {
       const file = await handle.getFile();
-      const dimensions = await readImageDimensions(file);
       images.push({
         name,
         path: name,
@@ -329,16 +349,41 @@ async function scanImagesFromFolder(directoryHandle) {
         size: file.size,
         lastModified: file.lastModified,
         type: file.type || 'image/unknown',
-        width: dimensions.width,
-        height: dimensions.height,
-        ratio: dimensions.width && dimensions.height ? dimensions.width / dimensions.height : 0
+        width: 0,
+        height: 0,
+        ratio: 0
       });
     } catch (err) {
       console.warn('Skipping unreadable image:', name, err);
     }
   }
+  if (state.settings.loadOrder === 'ratio') await hydrateImageRatios(images);
   sortImages(images);
   return images;
+}
+
+async function hydrateImageRatios(images) {
+  let cursor = 0;
+
+  async function worker() {
+    while (cursor < images.length) {
+      const image = images[cursor];
+      cursor += 1;
+      if (image.ratio) continue;
+      try {
+        const file = await getImageFile(image);
+        const dimensions = await readImageDimensions(file);
+        image.width = dimensions.width;
+        image.height = dimensions.height;
+        image.ratio = dimensions.width && dimensions.height ? dimensions.width / dimensions.height : 0;
+      } catch (err) {
+        console.warn('Could not read image dimensions:', image.name, err);
+      }
+    }
+  }
+
+  const workerCount = Math.min(DIMENSION_SCAN_CONCURRENCY, images.length);
+  await Promise.all(Array.from({ length: workerCount }, worker));
 }
 
 function sortImages(images) {
@@ -459,7 +504,7 @@ async function getPngInfo(image) {
 
   state.pngInfoLoading.add(image.path);
   try {
-    const file = await image.handle.getFile();
+    const file = await getImageFile(image);
     const rawInfo = await extractPngInfoFromFile(file);
     state.pngRawInfoCache.set(image.path, rawInfo);
     const info = window.PngInfoFormatter
@@ -552,7 +597,7 @@ async function renderCurrentImage() {
 
   el.dropZone.classList.add('hidden');
   try {
-    const file = await image.handle.getFile();
+    const file = await getImageFile(image);
     revokeObjectUrl();
     state.objectUrl = URL.createObjectURL(file);
     el.mainImage.src = state.objectUrl;
@@ -779,7 +824,7 @@ async function sortTo(kind, options = {}) {
 
   try {
     for (const image of selected) {
-      const file = await image.handle.getFile();
+      const file = await getImageFile(image);
       const targetName = options.prefix ? `${options.prefix}${image.name}` : image.name;
       const written = await writeFileToDirectory(file, targetDirectory, targetName);
       actions.push({
@@ -911,6 +956,16 @@ async function warmGalleryTagSearch(token) {
 
 function renderGallery(scrollCurrent = true, skipWarm = false) {
   const token = ++state.galleryRenderToken;
+  if (state.galleryThumbObserver) state.galleryThumbObserver.disconnect();
+  state.galleryThumbObserver = 'IntersectionObserver' in window
+    ? new IntersectionObserver((entries) => {
+      for (const entry of entries) {
+        if (!entry.isIntersecting) continue;
+        state.galleryThumbObserver.unobserve(entry.target);
+        loadGalleryThumb(entry.target);
+      }
+    }, { root: el.galleryViewer, rootMargin: '600px' })
+    : null;
   el.galleryGrid.style.setProperty('--thumb-size', `${state.thumbSize}px`);
   const frag = document.createDocumentFragment();
   const current = currentImage();
@@ -928,13 +983,8 @@ function renderGallery(scrollCurrent = true, skipWarm = false) {
     const img = document.createElement('img');
     img.loading = 'lazy';
     img.alt = image.name;
-    image.handle.getFile().then((file) => {
-      const url = URL.createObjectURL(file);
-      img.src = url;
-      img.addEventListener('load', () => URL.revokeObjectURL(url), { once: true });
-    }).catch(() => {
-      img.alt = `Could not load ${image.name}`;
-    });
+    img.dataset.index = String(index);
+    img.dataset.path = image.path;
 
     const label = document.createElement('span');
     label.title = image.name;
@@ -965,6 +1015,11 @@ function renderGallery(scrollCurrent = true, skipWarm = false) {
   }
 
   el.galleryGrid.replaceChildren(frag);
+  const thumbs = el.galleryGrid.querySelectorAll('img[data-index]');
+  for (const thumb of thumbs) {
+    if (state.galleryThumbObserver) state.galleryThumbObserver.observe(thumb);
+    else loadGalleryThumb(thumb);
+  }
 
   if (scrollCurrent && current) {
     const node = el.galleryGrid.querySelector(`[data-path="${CSS.escape(current.path)}"]`);
@@ -972,6 +1027,24 @@ function renderGallery(scrollCurrent = true, skipWarm = false) {
   }
 
   if (!skipWarm) warmGalleryTagSearch(token);
+}
+
+function loadGalleryThumb(img) {
+  const index = Number(img.dataset.index);
+  const image = state.filteredImages[index]?.path === img.dataset.path
+    ? state.filteredImages[index]
+    : state.filteredImages.find((candidate) => candidate.path === img.dataset.path);
+  if (!image || img.dataset.loaded === 'true') return;
+  img.dataset.loaded = 'true';
+  getImageFile(image).then((file) => {
+    const url = URL.createObjectURL(file);
+    img.src = url;
+    img.addEventListener('load', () => URL.revokeObjectURL(url), { once: true });
+    img.addEventListener('error', () => URL.revokeObjectURL(url), { once: true });
+  }).catch((err) => {
+    img.alt = `Could not load ${image.name}`;
+    console.warn('Could not load gallery thumbnail:', image.name, err);
+  });
 }
 
 function zoomGallery(delta) {
@@ -1075,8 +1148,17 @@ function bindEvents() {
   el.loadOrder.addEventListener('change', async () => {
     state.settings.loadOrder = el.loadOrder.value;
     saveJson(SETTINGS_KEY, state.settings);
-    if (state.sourceHandle) await rescanSource(true);
-    else updateStatus();
+    if (state.settings.loadOrder === 'ratio' && state.allImages.length) {
+      toast('Reading image ratios. Large folders may take a moment.', 'warn');
+      await hydrateImageRatios(state.allImages);
+    }
+    if (state.allImages.length) {
+      sortImages(state.allImages);
+      filterImages();
+      toast(`Sorted by ${state.settings.loadOrder}.`, 'good');
+    } else {
+      updateStatus();
+    }
   });
   el.searchInput.addEventListener('input', filterImages);
   el.caseSensitive.addEventListener('change', () => { saveSettingsFromUi(); filterImages(); });
