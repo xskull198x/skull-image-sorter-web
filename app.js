@@ -15,12 +15,24 @@ const OUTPUT_DEFAULTS = {
 };
 const SETTINGS_KEY = 'skullImageSorter.settings.v1';
 const KEY_LOG_KEY = 'skullImageSorter.keyLog.v1';
+const LAST_ACTION_IDB_KEY = 'lastSortAction';
 const DB_NAME = 'skullImageSorter.handles.v1';
 const DB_STORE = 'handles';
 const PNG_SIGNATURE = [137, 80, 78, 71, 13, 10, 26, 10];
 const DIMENSION_SCAN_CONCURRENCY = Math.max(2, Math.min(8, navigator.hardwareConcurrency ? Math.floor(navigator.hardwareConcurrency / 2) : 4));
-const APP_VERSION = 'v2.1';
+const APP_VERSION = 'v2.11';
 const VERSION_LOG = [
+  {
+    version: 'v2.11',
+    date: '2026-07-02',
+    title: 'Safer undo and duplicate-file protection',
+    notes: [
+      'Ctrl+Z now remembers the last sort action even if the browser crashes or the page reloads.',
+      'Manual rescan tries to stay on the same filename instead of jumping back to the first image.',
+      'If an image cannot be displayed, the app now shows a clearer failed-image message instead of leaving a silent black screen.',
+      'Sorting already avoided overwriting duplicate filenames; this update keeps that safety path and uses numbered names like image_1.png when needed.'
+    ]
+  },
   {
     version: 'v2.1',
     date: '2026-06-27',
@@ -43,6 +55,7 @@ const el = {
   emptySelectSource: $('emptySelectSource'),
   singleViewer: $('singleViewer'),
   imageStage: $('imageStage'),
+  imageError: $('imageError'),
   galleryViewer: $('galleryViewer'),
   galleryGrid: $('galleryGrid'),
   gallerySearchInput: $('gallerySearchInput'),
@@ -111,6 +124,7 @@ const state = {
   pngInfoCache: new Map(),
   pngRawInfoCache: new Map(),
   pngInfoLoading: new Set(),
+  failedImagePath: null,
   gallerySearchQuery: '',
   gallerySearchMode: 'tag',
   galleryRenderToken: 0,
@@ -181,6 +195,38 @@ function closeVersionLog() {
 
 function isVersionLogOpen() {
   return !el.versionLogOverlay.classList.contains('hidden');
+}
+
+async function rememberLastAction(action) {
+  state.lastAction = action;
+  state.lastActionAt = now();
+  try {
+    await idbSet(LAST_ACTION_IDB_KEY, action);
+  } catch (err) {
+    console.warn('Could not save undo action:', err);
+  }
+}
+
+async function clearLastAction() {
+  state.lastAction = null;
+  try {
+    await idbDelete(LAST_ACTION_IDB_KEY);
+  } catch (err) {
+    console.warn('Could not clear undo action:', err);
+  }
+}
+
+async function restoreLastAction() {
+  try {
+    const action = await idbGet(LAST_ACTION_IDB_KEY);
+    if (action?.type === 'sort' && Array.isArray(action.actions) && action.actions.length) {
+      state.lastAction = action;
+      state.lastActionAt = action.savedAt || now();
+      toast('Undo data found. Ctrl+Z can undo the last sort if folder permissions are restored.', 'warn');
+    }
+  } catch (err) {
+    console.warn('Could not restore undo action:', err);
+  }
 }
 
 function getExtension(name) {
@@ -343,6 +389,16 @@ async function idbGet(key) {
     const req = tx.objectStore(DB_STORE).get(key);
     req.onsuccess = () => resolve(req.result || null);
     req.onerror = () => reject(req.error);
+  }).finally(() => db.close());
+}
+
+async function idbDelete(key) {
+  const db = await openDb();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(DB_STORE, 'readwrite');
+    tx.objectStore(DB_STORE).delete(key);
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
   }).finally(() => db.close());
 }
 
@@ -643,11 +699,35 @@ function revokeObjectUrl() {
   }
 }
 
+function showImageError(image, message) {
+  state.failedImagePath = image?.path || null;
+  revokeObjectUrl();
+  el.mainImage.removeAttribute('src');
+  el.mainImage.alt = image?.name || 'Image failed to load';
+  el.imageError.textContent = `${image?.name || 'This image'} could not be displayed.\n${message}`;
+  el.imageError.classList.remove('hidden');
+}
+
+function hideImageError() {
+  state.failedImagePath = null;
+  el.imageError.textContent = '';
+  el.imageError.classList.add('hidden');
+}
+
+function handleCurrentImageDecodeError() {
+  const image = currentImage();
+  if (!image || state.failedImagePath === image.path) return;
+  showImageError(image, 'The browser could read the file, but could not decode it as a displayable image. Try opening it outside the sorter to confirm the file is valid.');
+  toast(`Could not display ${image.name}.`, 'bad');
+  updateStatus();
+}
+
 async function renderCurrentImage() {
   const image = currentImage();
   if (!image) {
     revokeObjectUrl();
     el.mainImage.removeAttribute('src');
+    hideImageError();
     el.dropZone.classList.remove('hidden');
     await updatePngInfoBox();
     updateStatus();
@@ -658,11 +738,13 @@ async function renderCurrentImage() {
   try {
     const file = await getImageFile(image);
     revokeObjectUrl();
+    hideImageError();
     state.objectUrl = URL.createObjectURL(file);
     el.mainImage.src = state.objectUrl;
     el.mainImage.alt = image.name;
     if (el.mainImage.complete) resetImageTransform();
   } catch (err) {
+    showImageError(image, err.message);
     toast(`Could not load ${image.name}: ${err.message}`, 'bad');
   }
   await updatePngInfoBox();
@@ -717,7 +799,7 @@ function setCompatStatus() {
 async function selectSourceFolder() {
   try {
     state.sourceHandle = await chooseDirectory('sourceHandle', 'readwrite');
-    await rescanSource();
+    await rescanSource(true, false);
     toast(`Loaded ${state.allImages.length} image(s) from ${state.sourceHandle.name}.`, 'good');
   } catch (err) {
     toast(`Source folder not selected: ${err.message}`, 'warn');
@@ -785,20 +867,33 @@ async function restoreSavedHandles() {
   }
 }
 
-async function rescanSource(showToast = true) {
+async function rescanSource(showToast = true, preserveCurrent = true) {
   if (!state.sourceHandle) {
     toast('No source folder selected.', 'warn');
     return;
   }
+  const currentPath = preserveCurrent ? currentImage()?.path : null;
   const ok = await verifyPermission(state.sourceHandle, 'readwrite');
   if (!ok) throw new Error('Source folder permission denied.');
   state.allImages = await scanImagesFromFolder(state.sourceHandle);
   state.pngInfoCache.clear();
   state.pngRawInfoCache.clear();
   state.pngInfoLoading.clear();
-  state.currentIndex = 0;
   state.selectedPaths.clear();
   filterImages();
+  let restoredIndex = -1;
+  if (currentPath) {
+    restoredIndex = state.filteredImages.findIndex((image) => image.path === currentPath);
+  }
+  if (restoredIndex >= 0) {
+    state.currentIndex = restoredIndex;
+    await renderCurrentImage();
+    updateStatus();
+  } else if (!currentPath) {
+    state.currentIndex = 0;
+    await renderCurrentImage();
+    updateStatus();
+  }
   if (showToast) toast(`Rescanned ${state.allImages.length} image(s).`, 'good');
 }
 
@@ -905,8 +1000,7 @@ async function sortTo(kind, options = {}) {
     }
 
     removeImagesFromLists(selected);
-    state.lastAction = { type: 'sort', actions };
-    state.lastActionAt = now();
+    await rememberLastAction({ type: 'sort', savedAt: now(), actions });
     logSortKey(kind === 'good' ? '1' : kind === 'rejected' ? '2' : '3');
     if (state.galleryMode) renderGallery();
     await renderCurrentImage();
@@ -919,7 +1013,7 @@ async function sortTo(kind, options = {}) {
 }
 
 async function undoLastAction() {
-  const action = state.lastAction;
+  const action = state.lastAction || await idbGet(LAST_ACTION_IDB_KEY).catch(() => null);
   if (!action || action.type !== 'sort') {
     toast('Nothing to undo.', 'warn');
     return;
@@ -927,19 +1021,22 @@ async function undoLastAction() {
 
   try {
     for (const item of [...action.actions].reverse()) {
-      await verifyPermission(item.targetDirectory, 'readwrite');
+      const targetOk = await verifyPermission(item.targetDirectory, 'readwrite');
+      if (!targetOk) throw new Error(`Permission denied for output folder while undoing ${item.targetName}.`);
       await item.targetDirectory.removeEntry(item.targetName).catch((err) => {
         if (err.name !== 'NotFoundError') throw err;
       });
 
       if (item.mode === 'move') {
-        await verifyPermission(item.sourceParentHandle, 'readwrite');
+        const sourceOk = await verifyPermission(item.sourceParentHandle, 'readwrite');
+        if (!sourceOk) throw new Error(`Permission denied for source folder while restoring ${item.sourceName}.`);
+        if (!item.fileSnapshot) throw new Error(`Missing undo copy for ${item.sourceName}.`);
         const restored = await writeFileToDirectory(item.fileSnapshot, item.sourceParentHandle, item.sourceName);
         item.sourceHandle = restored.handle;
       }
     }
 
-    state.lastAction = null;
+    await clearLastAction();
     await rescanSource(false);
     state.lastActionAt = now();
     toast('Last action undone.', 'good');
@@ -1267,6 +1364,7 @@ function bindEvents() {
   el.singleViewer.addEventListener('pointerup', endPan);
   el.singleViewer.addEventListener('pointercancel', endPan);
   el.mainImage.addEventListener('load', resetImageTransform);
+  el.mainImage.addEventListener('error', handleCurrentImageDecodeError);
   el.mainImage.addEventListener('dblclick', resetImageTransform);
 
   window.addEventListener('keydown', async (event) => {
@@ -1372,6 +1470,7 @@ async function init() {
     state.outputHandles.rejected = await idbGet('rejectedHandle').catch(() => null);
     state.outputHandles.bad = await idbGet('badHandle').catch(() => null);
     state.outputHandles.delete = await idbGet('deleteHandle').catch(() => null);
+    await restoreLastAction();
     updateStatus();
     if (state.sourceHandle) toast('Saved folders found. Press “Restore saved folder permissions” to reuse them.', 'warn');
   }
