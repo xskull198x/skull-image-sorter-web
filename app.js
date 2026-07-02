@@ -896,12 +896,12 @@ async function restoreSavedHandles() {
   }
 }
 
-async function rescanSource(showToast = true, preserveCurrent = true) {
+async function rescanSource(showToast = true, preserveCurrent = true, targetPath = null) {
   if (!state.sourceHandle) {
     toast('No source folder selected.', 'warn');
     return;
   }
-  const currentPath = preserveCurrent ? currentImage()?.path : null;
+  const currentPath = targetPath || (preserveCurrent ? currentImage()?.path : null);
   const ok = await verifyPermission(state.sourceHandle, 'readwrite');
   if (!ok) throw new Error('Source folder permission denied.');
   state.allImages = await scanImagesFromFolder(state.sourceHandle);
@@ -1059,6 +1059,7 @@ async function undoLastAction() {
   }
 
   try {
+    let restoredSourcePath = null;
     for (const item of [...action.actions].reverse()) {
       const targetOk = await verifyPermission(item.targetDirectory, 'readwrite');
       if (!targetOk) throw new Error(`Permission denied for output folder while undoing ${item.targetName}.`);
@@ -1069,6 +1070,9 @@ async function undoLastAction() {
         const targetFile = await getActionTargetFile(item);
         const restored = await writeFileToDirectory(targetFile, item.sourceParentHandle, item.sourceName);
         item.sourceHandle = restored.handle;
+        restoredSourcePath = restoredSourcePath || restored.name;
+      } else {
+        restoredSourcePath = restoredSourcePath || item.sourcePath || item.sourceName;
       }
 
       await item.targetDirectory.removeEntry(item.targetName).catch((err) => {
@@ -1077,7 +1081,7 @@ async function undoLastAction() {
     }
 
     await clearLastAction();
-    await rescanSource(false);
+    await rescanSource(false, false, restoredSourcePath);
     state.lastActionAt = now();
     toast('Last action undone.', 'good');
   } catch (err) {
