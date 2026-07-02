@@ -20,8 +20,18 @@ const DB_NAME = 'skullImageSorter.handles.v1';
 const DB_STORE = 'handles';
 const PNG_SIGNATURE = [137, 80, 78, 71, 13, 10, 26, 10];
 const DIMENSION_SCAN_CONCURRENCY = Math.max(2, Math.min(8, navigator.hardwareConcurrency ? Math.floor(navigator.hardwareConcurrency / 2) : 4));
-const APP_VERSION = 'v2.12';
+const APP_VERSION = 'v2.13';
 const VERSION_LOG = [
+  {
+    version: 'v2.13',
+    date: '2026-07-02',
+    title: 'Fixed sort key advance delay from undo storage',
+    notes: [
+      'Sorting no longer tries to save a full copy of moved high-res images into browser storage before advancing.',
+      'After pressing a sorting key, the next image should show right away again.',
+      'Undo for moved files now restores from the sorted output file instead of relying on a huge stored image snapshot.'
+    ]
+  },
   {
     version: 'v2.12',
     date: '2026-07-02',
@@ -208,14 +218,12 @@ function isVersionLogOpen() {
   return !el.versionLogOverlay.classList.contains('hidden');
 }
 
-async function rememberLastAction(action) {
+function rememberLastAction(action) {
   state.lastAction = action;
   state.lastActionAt = now();
-  try {
-    await idbSet(LAST_ACTION_IDB_KEY, action);
-  } catch (err) {
+  idbSet(LAST_ACTION_IDB_KEY, action).catch((err) => {
     console.warn('Could not save undo action:', err);
-  }
+  });
 }
 
 async function clearLastAction() {
@@ -969,6 +977,17 @@ async function writeFileToDirectory(sourceFile, targetDirectory, targetName) {
   return { name, handle };
 }
 
+async function getActionTargetFile(item) {
+  try {
+    return await item.targetHandle.getFile();
+  } catch (err) {
+    if (!['NotFoundError', 'NotReadableError'].includes(err.name)) throw err;
+    const handle = await item.targetDirectory.getFileHandle(item.targetName, { create: false });
+    item.targetHandle = handle;
+    return handle.getFile();
+  }
+}
+
 function imagesToSort() {
   if (state.galleryMode && state.selectedPaths.size) {
     const selected = state.filteredImages.filter((img) => state.selectedPaths.has(img.path));
@@ -1011,8 +1030,7 @@ async function sortTo(kind, options = {}) {
         targetHandle: written.handle,
         targetDirectory,
         kind,
-        mode,
-        fileSnapshot: mode === 'move' ? file : null
+        mode
       });
 
       if (mode === 'move') {
@@ -1021,7 +1039,7 @@ async function sortTo(kind, options = {}) {
     }
 
     removeImagesFromLists(selected);
-    await rememberLastAction({ type: 'sort', savedAt: now(), actions });
+    rememberLastAction({ type: 'sort', savedAt: now(), actions });
     logSortKey(kind === 'good' ? '1' : kind === 'rejected' ? '2' : '3');
     if (state.galleryMode) renderGallery();
     await renderCurrentImage();
@@ -1044,17 +1062,18 @@ async function undoLastAction() {
     for (const item of [...action.actions].reverse()) {
       const targetOk = await verifyPermission(item.targetDirectory, 'readwrite');
       if (!targetOk) throw new Error(`Permission denied for output folder while undoing ${item.targetName}.`);
-      await item.targetDirectory.removeEntry(item.targetName).catch((err) => {
-        if (err.name !== 'NotFoundError') throw err;
-      });
 
       if (item.mode === 'move') {
         const sourceOk = await verifyPermission(item.sourceParentHandle, 'readwrite');
         if (!sourceOk) throw new Error(`Permission denied for source folder while restoring ${item.sourceName}.`);
-        if (!item.fileSnapshot) throw new Error(`Missing undo copy for ${item.sourceName}.`);
-        const restored = await writeFileToDirectory(item.fileSnapshot, item.sourceParentHandle, item.sourceName);
+        const targetFile = await getActionTargetFile(item);
+        const restored = await writeFileToDirectory(targetFile, item.sourceParentHandle, item.sourceName);
         item.sourceHandle = restored.handle;
       }
+
+      await item.targetDirectory.removeEntry(item.targetName).catch((err) => {
+        if (err.name !== 'NotFoundError') throw err;
+      });
     }
 
     await clearLastAction();
