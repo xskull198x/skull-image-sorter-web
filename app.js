@@ -20,8 +20,18 @@ const DB_NAME = 'skullImageSorter.handles.v1';
 const DB_STORE = 'handles';
 const PNG_SIGNATURE = [137, 80, 78, 71, 13, 10, 26, 10];
 const DIMENSION_SCAN_CONCURRENCY = Math.max(2, Math.min(8, navigator.hardwareConcurrency ? Math.floor(navigator.hardwareConcurrency / 2) : 4));
-const APP_VERSION = 'v2.11';
+const APP_VERSION = 'v2.12';
 const VERSION_LOG = [
+  {
+    version: 'v2.12',
+    date: '2026-07-02',
+    title: 'Sorting now advances the displayed image reliably',
+    notes: [
+      'After pressing 1, 2, 3, or delete, the sorter should immediately show the next image again.',
+      'Image loading now ignores stale load/error events from the previous picture so the display does not get stuck after a sort.',
+      'The viewer clears the old picture before loading the next one, making the screen state easier to trust.'
+    ]
+  },
   {
     version: 'v2.11',
     date: '2026-07-02',
@@ -118,6 +128,7 @@ const state = {
   currentIndex: 0,
   selectedPaths: new Set(),
   objectUrl: null,
+  imageRenderToken: 0,
   showFilename: true,
   galleryMode: false,
   pngInfoEnabled: false,
@@ -716,17 +727,19 @@ function hideImageError() {
 
 function handleCurrentImageDecodeError() {
   const image = currentImage();
-  if (!image || state.failedImagePath === image.path) return;
+  if (!image || state.failedImagePath === image.path || el.mainImage.dataset.path !== image.path) return;
   showImageError(image, 'The browser could read the file, but could not decode it as a displayable image. Try opening it outside the sorter to confirm the file is valid.');
   toast(`Could not display ${image.name}.`, 'bad');
   updateStatus();
 }
 
 async function renderCurrentImage() {
+  const renderToken = ++state.imageRenderToken;
   const image = currentImage();
   if (!image) {
     revokeObjectUrl();
     el.mainImage.removeAttribute('src');
+    delete el.mainImage.dataset.path;
     hideImageError();
     el.dropZone.classList.remove('hidden');
     await updatePngInfoBox();
@@ -737,16 +750,24 @@ async function renderCurrentImage() {
   el.dropZone.classList.add('hidden');
   try {
     const file = await getImageFile(image);
+    if (renderToken !== state.imageRenderToken || image !== currentImage()) return;
     revokeObjectUrl();
     hideImageError();
+    el.mainImage.removeAttribute('src');
+    el.mainImage.dataset.path = image.path;
     state.objectUrl = URL.createObjectURL(file);
     el.mainImage.src = state.objectUrl;
     el.mainImage.alt = image.name;
-    if (el.mainImage.complete) resetImageTransform();
+    if (el.mainImage.decode) {
+      await el.mainImage.decode().catch(() => null);
+    }
+    if (renderToken === state.imageRenderToken && image === currentImage() && el.mainImage.complete) resetImageTransform();
   } catch (err) {
+    if (renderToken !== state.imageRenderToken || image !== currentImage()) return;
     showImageError(image, err.message);
     toast(`Could not load ${image.name}: ${err.message}`, 'bad');
   }
+  if (renderToken !== state.imageRenderToken || image !== currentImage()) return;
   await updatePngInfoBox();
   updateStatus();
 }
