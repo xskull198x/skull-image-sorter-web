@@ -254,6 +254,7 @@ code { color: #ffd2d2; }
 .toggle-line.compact { margin-top: 0.5rem; }
 .hotkey-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0.35rem 0.45rem; color: var(--muted); font-size: 0.83rem; }
 .status-card, .stats-card { font-size: 0.82rem; }
+.session-history-card p { font-size: 0.82rem; overflow-wrap: anywhere; }
 .action-card button:last-child, .card button:last-child { margin-bottom: 0; }
 .hidden { display: none !important; }
 .show-ui {

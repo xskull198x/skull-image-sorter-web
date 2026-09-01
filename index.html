@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Skull's Image Sorter/Png Info</title>
-  <link rel="stylesheet" href="styles.css?v=20260702-3" />
+  <link rel="stylesheet" href="styles.css?v=20260901-1" />
 </head>
 <body>
   <main id="app" class="app-shell">
@@ -59,7 +59,7 @@
     <aside id="sidebar" class="sidebar" aria-label="Controls">
       <div class="brand-row">
         <div>
-          <h1 id="appTitle">Image Sorter v2.13</h1>
+          <h1 id="appTitle">Image Sorter v2.14</h1>
           <p class="muted">Local-only browser version</p>
         </div>
         <button id="hideUiBtn" title="Hide sidebar">H</button>
@@ -89,6 +89,13 @@
         <button id="selectRejectedBtn">Set Folder #2 / Flawed</button>
         <button id="selectBadBtn">Set Folder #3 / Bad</button>
         <button id="restoreHandlesBtn">Restore saved folder permissions</button>
+      </section>
+
+      <section class="card session-history-card">
+        <h2>Session History</h2>
+        <button id="selectHistoryFolderBtn" type="button">Set Documents history folder</button>
+        <p id="historyStatus">History file: not set</p>
+        <p id="historySaveStatus" class="tiny muted">Folder choices are also remembered in this browser.</p>
       </section>
 
       <section class="card">
@@ -190,8 +197,8 @@
     </section>
   </div>
 
-  <script src="presets-data.js?v=20260702-3"></script>
-  <script src="png-info.js?v=20260702-3"></script>
-  <script src="app.js?v=20260702-4"></script>
+  <script src="presets-data.js?v=20260901-1"></script>
+  <script src="png-info.js?v=20260901-1"></script>
+  <script src="app.js?v=20260901-1"></script>
 </body>
 </html>

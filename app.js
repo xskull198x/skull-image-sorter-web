@@ -15,13 +15,26 @@ const OUTPUT_DEFAULTS = {
 };
 const SETTINGS_KEY = 'skullImageSorter.settings.v1';
 const KEY_LOG_KEY = 'skullImageSorter.keyLog.v1';
+const SESSION_HISTORY_KEY = 'skullImageSorter.sessionHistory.v1';
+const SESSION_HISTORY_HANDLE_KEY = 'sessionHistoryHandle';
+const SESSION_HISTORY_FILENAME = 'skull-image-sorter-session-history.json';
 const LAST_ACTION_IDB_KEY = 'lastSortAction';
 const DB_NAME = 'skullImageSorter.handles.v1';
 const DB_STORE = 'handles';
 const PNG_SIGNATURE = [137, 80, 78, 71, 13, 10, 26, 10];
 const DIMENSION_SCAN_CONCURRENCY = Math.max(2, Math.min(8, navigator.hardwareConcurrency ? Math.floor(navigator.hardwareConcurrency / 2) : 4));
-const APP_VERSION = 'v2.13';
+const APP_VERSION = 'v2.14';
 const VERSION_LOG = [
+  {
+    version: 'v2.14',
+    date: '2026-09-01',
+    title: 'Session folder history',
+    notes: [
+      'Added a session history section so the sorter can remember which source and output folders were used.',
+      'After you pick a Documents/history folder once, the app writes a JSON history file there automatically.',
+      'The browser only gives websites folder names, not full Windows paths, so the history records the names and sorter settings the browser can safely access.'
+    ]
+  },
   {
     version: 'v2.13',
     date: '2026-07-02',
@@ -98,6 +111,9 @@ const el = {
   selectRejectedBtn: $('selectRejectedBtn'),
   selectBadBtn: $('selectBadBtn'),
   restoreHandlesBtn: $('restoreHandlesBtn'),
+  selectHistoryFolderBtn: $('selectHistoryFolderBtn'),
+  historyStatus: $('historyStatus'),
+  historySaveStatus: $('historySaveStatus'),
   loadOrder: $('loadOrder'),
   searchInput: $('searchInput'),
   caseSensitive: $('caseSensitive'),
@@ -133,6 +149,8 @@ const state = {
     bad: null,
     delete: null
   },
+  sessionHistoryHandle: null,
+  sessionHistory: [],
   allImages: [],
   filteredImages: [],
   currentIndex: 0,
@@ -245,6 +263,115 @@ async function restoreLastAction() {
     }
   } catch (err) {
     console.warn('Could not restore undo action:', err);
+  }
+}
+
+function handleName(handle) {
+  return handle?.name || null;
+}
+
+function buildSessionHistoryEntry(reason) {
+  return {
+    id: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
+    savedAt: new Date().toISOString(),
+    reason,
+    appVersion: APP_VERSION,
+    pageUrl: location.href,
+    browserPrivacyNote: 'Browser folder handles expose folder names, not full Windows paths.',
+    sourceFolder: handleName(state.sourceHandle),
+    outputRoot: handleName(state.outputRootHandle),
+    outputFolders: {
+      good: handleName(state.outputHandles.good),
+      rejected: handleName(state.outputHandles.rejected),
+      bad: handleName(state.outputHandles.bad),
+      delete: handleName(state.outputHandles.delete)
+    },
+    settings: {
+      sortMode: state.settings.sortMode,
+      loadOrder: state.settings.loadOrder,
+      labels: { ...state.settings.labels },
+      caseSensitive: state.settings.caseSensitive
+    },
+    imageCounts: {
+      all: state.allImages.length,
+      filtered: state.filteredImages.length
+    }
+  };
+}
+
+function updateSessionHistoryStatus() {
+  const count = state.sessionHistory.length;
+  const folder = handleName(state.sessionHistoryHandle);
+  if (el.historyStatus) {
+    el.historyStatus.textContent = folder
+      ? `History file: ${folder}\\${SESSION_HISTORY_FILENAME}`
+      : 'History file: not set';
+  }
+  if (el.historySaveStatus && !folder) {
+    el.historySaveStatus.textContent = `Browser-local history entries: ${count}. Set a Documents folder to also save a JSON file.`;
+  }
+}
+
+async function writeSessionHistoryFile() {
+  if (!state.sessionHistoryHandle) {
+    updateSessionHistoryStatus();
+    return false;
+  }
+
+  const ok = await verifyPermission(state.sessionHistoryHandle, 'readwrite');
+  if (!ok) throw new Error('Session history folder permission was not granted.');
+  const fileHandle = await state.sessionHistoryHandle.getFileHandle(SESSION_HISTORY_FILENAME, { create: true });
+  const writable = await fileHandle.createWritable();
+  await writable.write(JSON.stringify({
+    schemaVersion: 1,
+    updatedAt: new Date().toISOString(),
+    appName: 'Skull Image Sorter Web',
+    browserPrivacyNote: 'The browser does not reveal full Windows folder paths to websites. Folder names are recorded from File System Access handles.',
+    sessions: state.sessionHistory
+  }, null, 2));
+  await writable.close();
+  if (el.historySaveStatus) {
+    el.historySaveStatus.textContent = `Saved ${state.sessionHistory.length} history entr${state.sessionHistory.length === 1 ? 'y' : 'ies'} to ${SESSION_HISTORY_FILENAME}.`;
+  }
+  return true;
+}
+
+async function recordSessionHistory(reason) {
+  state.sessionHistory.push(buildSessionHistoryEntry(reason));
+  if (state.sessionHistory.length > 500) state.sessionHistory = state.sessionHistory.slice(-500);
+  saveJson(SESSION_HISTORY_KEY, state.sessionHistory);
+  updateSessionHistoryStatus();
+
+  try {
+    await writeSessionHistoryFile();
+  } catch (err) {
+    if (el.historySaveStatus) el.historySaveStatus.textContent = `Could not save history file: ${err.message}`;
+    console.warn('Could not save session history file:', err);
+  }
+}
+
+async function selectSessionHistoryFolder() {
+  try {
+    let handle;
+    try {
+      handle = await window.showDirectoryPicker({
+        id: 'skull-image-sorter-session-history',
+        mode: 'readwrite',
+        startIn: 'documents'
+      });
+    } catch (err) {
+      if (err.name !== 'TypeError') throw err;
+      handle = await window.showDirectoryPicker({ mode: 'readwrite' });
+    }
+
+    const ok = await verifyPermission(handle, 'readwrite');
+    if (!ok) throw new Error('Folder permission was not granted.');
+    state.sessionHistoryHandle = handle;
+    await idbSet(SESSION_HISTORY_HANDLE_KEY, handle);
+    await recordSessionHistory('history-folder-selected');
+    toast(`Session history folder set: ${handle.name}`, 'good');
+  } catch (err) {
+    toast(`Session history folder not selected: ${err.message}`, 'warn');
   }
 }
 
@@ -819,7 +946,7 @@ function setCompatStatus() {
   } else {
     el.compatWarning.classList.remove('ok');
     el.compatText.textContent = 'This browser does not support folder read/write access. Use current Chrome or Edge.';
-    for (const btn of [el.selectSourceBtn, el.selectOutputRootBtn, el.selectGoodBtn, el.selectRejectedBtn, el.selectBadBtn, el.restoreHandlesBtn, el.emptySelectSource]) {
+    for (const btn of [el.selectSourceBtn, el.selectOutputRootBtn, el.selectGoodBtn, el.selectRejectedBtn, el.selectBadBtn, el.restoreHandlesBtn, el.selectHistoryFolderBtn, el.emptySelectSource]) {
       btn.disabled = true;
     }
   }
@@ -829,6 +956,7 @@ async function selectSourceFolder() {
   try {
     state.sourceHandle = await chooseDirectory('sourceHandle', 'readwrite');
     await rescanSource(true, false);
+    await recordSessionHistory('source-folder-selected');
     toast(`Loaded ${state.allImages.length} image(s) from ${state.sourceHandle.name}.`, 'good');
   } catch (err) {
     toast(`Source folder not selected: ${err.message}`, 'warn');
@@ -850,6 +978,7 @@ async function selectOutputRoot() {
     ]);
     toast(`Output root set: ${state.outputRootHandle.name}`, 'good');
     updateStatus();
+    await recordSessionHistory('output-root-selected');
   } catch (err) {
     toast(`Output root not selected: ${err.message}`, 'warn');
   }
@@ -861,6 +990,7 @@ async function selectOutputFolder(kind) {
     state.outputHandles[kind] = handle;
     toast(`${kind} folder set: ${handle.name}`, 'good');
     updateStatus();
+    await recordSessionHistory(`${kind}-output-folder-selected`);
   } catch (err) {
     toast(`Folder not selected: ${err.message}`, 'warn');
   }
@@ -874,6 +1004,7 @@ async function restoreSavedHandles() {
     state.outputHandles.rejected = await idbGet('rejectedHandle');
     state.outputHandles.bad = await idbGet('badHandle');
     state.outputHandles.delete = await idbGet('deleteHandle');
+    state.sessionHistoryHandle = await idbGet(SESSION_HISTORY_HANDLE_KEY).catch(() => null);
 
     const handles = [
       state.sourceHandle,
@@ -881,7 +1012,8 @@ async function restoreSavedHandles() {
       state.outputHandles.good,
       state.outputHandles.rejected,
       state.outputHandles.bad,
-      state.outputHandles.delete
+      state.outputHandles.delete,
+      state.sessionHistoryHandle
     ].filter(Boolean);
 
     for (const handle of handles) {
@@ -891,6 +1023,7 @@ async function restoreSavedHandles() {
     if (state.sourceHandle) await rescanSource(false);
     toast('Saved folder handles restored where the browser allowed it.', 'good');
     updateStatus();
+    await recordSessionHistory('saved-folder-permissions-restored');
   } catch (err) {
     toast(`Could not restore saved handles: ${err.message}`, 'warn');
   }
@@ -1313,10 +1446,13 @@ async function clearSessionData() {
   revokeObjectUrl();
   localStorage.removeItem(SETTINGS_KEY);
   localStorage.removeItem(KEY_LOG_KEY);
+  localStorage.removeItem(SESSION_HISTORY_KEY);
   await idbClear().catch(console.warn);
   state.sourceHandle = null;
   state.outputRootHandle = null;
   state.outputHandles = { good: null, rejected: null, bad: null, delete: null };
+  state.sessionHistoryHandle = null;
+  state.sessionHistory = [];
   state.allImages = [];
   state.filteredImages = [];
   state.currentIndex = 0;
@@ -1324,6 +1460,7 @@ async function clearSessionData() {
   state.lastAction = null;
   state.lastActionAt = null;
   state.keyLog = [];
+  updateSessionHistoryStatus();
   applySettingsToUi();
   filterImages();
   updateStats();
@@ -1344,6 +1481,7 @@ function bindEvents() {
   el.selectRejectedBtn.addEventListener('click', () => selectOutputFolder('rejected'));
   el.selectBadBtn.addEventListener('click', () => selectOutputFolder('bad'));
   el.restoreHandlesBtn.addEventListener('click', restoreSavedHandles);
+  el.selectHistoryFolderBtn.addEventListener('click', selectSessionHistoryFolder);
   el.saveSettingsBtn.addEventListener('click', saveSettingsFromUi);
   el.loadOrder.addEventListener('change', async () => {
     state.settings.loadOrder = el.loadOrder.value;
@@ -1493,6 +1631,8 @@ function bindEvents() {
 
 async function init() {
   el.appTitle.textContent = `Image Sorter ${APP_VERSION}`;
+  state.sessionHistory = loadJson(SESSION_HISTORY_KEY, []);
+  if (!Array.isArray(state.sessionHistory)) state.sessionHistory = [];
   setCompatStatus();
   applySettingsToUi();
   loadKeyLog();
@@ -1514,8 +1654,10 @@ async function init() {
     state.outputHandles.rejected = await idbGet('rejectedHandle').catch(() => null);
     state.outputHandles.bad = await idbGet('badHandle').catch(() => null);
     state.outputHandles.delete = await idbGet('deleteHandle').catch(() => null);
+    state.sessionHistoryHandle = await idbGet(SESSION_HISTORY_HANDLE_KEY).catch(() => null);
     await restoreLastAction();
     updateStatus();
+    updateSessionHistoryStatus();
     if (state.sourceHandle) toast('Saved folders found. Press “Restore saved folder permissions” to reuse them.', 'warn');
   }
 }
